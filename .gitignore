@@ -1,0 +1,15 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# PDFs/images are large binaries or scratch artifacts — put them in data/ but don't commit
+data/*.pdf
+data/*.png
+.DS_Store
+.claude/
+FINDINGS.md
+BACKLOG.md

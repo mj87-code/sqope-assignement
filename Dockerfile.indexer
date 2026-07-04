@@ -1,0 +1,52 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    libxcb1 \
+    libxrender1 \
+    libxext6 \
+    libglib2.0-0 \
+    libfontconfig1 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# --timeout/--retries: pip's default 15s per-read socket timeout is too short
+# for large wheels (torch, transformers, docling) over a slow/flaky connection,
+# and its default of 5 retries is per-attempt, not a real backoff — bump both
+# so a transient network blip doesn't fail the whole build.
+RUN pip install --no-cache-dir --timeout 120 --retries 10 \
+    torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# docling (and its rapidocr/opencv/transformers/torch-adjacent dependency
+# tree) is the single heaviest and most failure-prone package this image
+# needs — install it in its own layer so a network failure here doesn't force
+# redownloading everything else in requirements.txt on retry (docker reuses
+# this layer once it succeeds). Not in requirements.txt: the API image
+# shares that file and never parses PDFs, so it doesn't need docling at all.
+RUN pip install --no-cache-dir --timeout 120 --retries 10 docling==2.107.0
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.txt
+
+# Pre-download all models at build time so each `docker run` is self-contained
+# (no model fetch from HuggingFace at runtime).
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+# Docling layout + tableformer models into an explicit folder the parser loads
+# from at runtime (OCR engines skipped — do_ocr is off).
+RUN python -c "from pathlib import Path; from docling.utils.model_downloader import download_models; download_models(output_dir=Path('/opt/docling-models'), with_rapidocr=False, with_easyocr=False)"
+
+# Run fully offline: load models from the baked-in folder, never call HuggingFace.
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+COPY . .
+
+# The PDF to index is NOT baked into the image — mount your own at /data/report.pdf:
+#   docker run --rm -v /path/to/your.pdf:/data/report.pdf ... <image>
+# Index a different mount path or use --dry-run by overriding the command:
+#   docker run ... <image> python -m indexer.cli --dry-run /data/other.pdf
+CMD ["python", "-m", "indexer.cli", "/data/report.pdf"]

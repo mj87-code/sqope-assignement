@@ -1,0 +1,28 @@
+# Virtual environment — 1.3 GB, never needed in an image (deps are pip-installed
+# in the Dockerfile). This is the single biggest cause of slow builds.
+.venv/
+venv/
+env/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Secrets and local data — provided at runtime (env vars / -v mount), not baked in
+.env
+.env.*
+data/
+
+# VCS / OS / editor
+.git/
+.gitignore
+.DS_Store
+
+# Note: tests/ and pyproject.toml are intentionally NOT ignored — Dockerfile.test
+# copies them.

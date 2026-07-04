@@ -1,0 +1,45 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CPU-only torch + torchvision together, from the same CPU-only
+# index. `transformers` imports torchvision-dependent code paths (e.g. object-
+# detection loss utilities) even when vision features aren't used, so
+# torchvision must be pinned here alongside a matching torch build — otherwise
+# pip's separate resolution for requirements.txt below can pull in a
+# mismatched torchvision wheel and break at import time (`operator
+# torchvision::nms does not exist`).
+# --timeout/--retries: pip's default 15s per-read socket timeout is too short
+# for large wheels over a slow/flaky connection, and its default of 5 retries
+# is per-attempt, not a real backoff — bump both so a transient network blip
+# doesn't fail the build.
+RUN pip install --no-cache-dir --timeout 120 --retries 10 \
+    torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# sentence-transformers (transformers/scipy/scikit-learn) is the single
+# heaviest remaining package this image needs — install it in its own layer
+# so a network failure here doesn't force redownloading everything else in
+# requirements.txt on retry (docker will reuse this layer once it succeeds).
+RUN pip install --no-cache-dir --timeout 120 --retries 10 sentence-transformers==5.6.0
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.txt
+
+# Pre-download models so runtime has no outbound dependency:
+#  - bi-encoder for vector retrieval, cross-encoder for reranking.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')"
+
+# Run fully offline: use the baked-in model cache, never call the HuggingFace Hub.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir --timeout 120 --retries 10 pytest==8.3.5 pytest-asyncio==0.24.0 httpx==0.28.1
+
+COPY tests/ tests/
+COPY pyproject.toml ./
+
+CMD ["pytest", "tests/test_api.py", "-m", "integration", "-v", "--tb=short"]

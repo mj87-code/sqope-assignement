@@ -1,0 +1,75 @@
+# Explicit project name so container/network/image names don't depend on the
+# directory basename.
+name: sqope-ai-home-assignment-task
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: sqope
+      POSTGRES_USER: sqope
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      # Consumed by 02-create-readonly-role.sh to provision the api_reader login.
+      API_DB_PASSWORD: ${API_DB_PASSWORD}
+    volumes:
+      # Numeric prefixes force init order: schema first, then the read-only role
+      # (the role's GRANTs reference the tables created in 01-init.sql).
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./db/create-readonly-role.sh:/docker-entrypoint-initdb.d/02-create-readonly-role.sh
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sqope -d sqope"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile.indexer
+    environment:
+      DATABASE_URL: postgresql://sqope:${DB_PASSWORD}@db:5432/sqope
+      HF_TOKEN: ${HF_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Runs once and exits — idempotent, safe to re-run
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      # The API connects as the least-privilege, SELECT-only role — never the
+      # owner. The indexer (which writes) keeps the privileged sqope login.
+      DATABASE_URL: postgresql://api_reader:${API_DB_PASSWORD}@db:5432/sqope
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      HF_TOKEN: ${HF_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    profiles: ["test"]
+
+volumes:
+  pgdata:

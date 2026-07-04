@@ -1,0 +1,25 @@
+[project]
+name = "sqope-ai-home-assignment-task"
+version = "0.1.0"
+description = "PDF-based due diligence QA — textual, analytical, and hybrid questions over indexed PDFs."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires a running PostgreSQL instance (set TEST_DATABASE_URL)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# pyflakes (F), pycodestyle errors (E), warnings (W), isort (I), pyupgrade (UP), bugbear (B)
+select = ["E", "F", "W", "I", "UP", "B"]
+# Allow the private helpers shared across pipeline modules (leading underscore imports).
+ignore = ["E501"]  # line length handled by the formatter, not enforced as errors
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import private helpers and re-import inside test bodies by design.
+"tests/*" = ["F811"]
