@@ -23,7 +23,6 @@ class TestIntentEval:
         defaults = dict(
             query_type="textual",
             clarified_query="What were the Q4 highlights?",
-            entities=["Q4"],
             target_table=None,
             target_column=None,
             row_filter=None,
@@ -140,7 +139,6 @@ class TestClarifyIntentMocked:
         fake_intent = QueryIntent(
             query_type="textual",
             clarified_query="What were the main Q4 highlights?",
-            entities=["Q4"],
             confidence=0.95,
             reasoning="Narrative question.",
         )
@@ -167,7 +165,7 @@ class TestClarifyIntentMocked:
         from pipeline.intent_clarifier import QueryIntent, clarify_intent
 
         fake_intent = QueryIntent(
-            query_type="textual", clarified_query="q", entities=[],
+            query_type="textual", clarified_query="q",
             confidence=0.9, reasoning="r",
         )
         mock_session = AsyncMock()

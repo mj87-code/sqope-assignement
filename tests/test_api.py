@@ -34,7 +34,6 @@ class TestQueryRoute:
         return QueryIntent(
             query_type=query_type,
             clarified_query="What were the Q4 highlights?",
-            entities=["Q4"],
             confidence=confidence,
             reasoning="test",
             **kwargs,
