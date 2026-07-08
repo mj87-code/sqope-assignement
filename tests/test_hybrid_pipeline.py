@@ -256,6 +256,87 @@ class TestHybridPipeline:
         assert captured_sources == []
 
 
+# Mirrors the real NovaTech "Consolidated Income Statement" table (pulled
+# directly from the live indexed document) — four revenue line items, a
+# "Total Revenue" subtotal (correctly excludable by _is_aggregate_row), and
+# several NON-revenue rows that are themselves derived subtotals but aren't
+# labelled "total" either, so nothing excludes them.
+INCOME_STATEMENT_ROWS = [
+    {"Category": "Revenue - Cloud Services",       "Q4 2024 (USD M)": 680.0},
+    {"Category": "Revenue - AI Solutions",          "Q4 2024 (USD M)": 310.0},
+    {"Category": "Revenue - Hardware",              "Q4 2024 (USD M)": 250.0},
+    {"Category": "Revenue - Support & Maintenance", "Q4 2024 (USD M)": 180.0},
+    {"Category": "Total Revenue",                   "Q4 2024 (USD M)": 1420.0},
+    {"Category": "Cost of Goods Sold",              "Q4 2024 (USD M)": 730.0},
+    {"Category": "Gross Profit",                    "Q4 2024 (USD M)": 690.0},
+    {"Category": "Operating Expenses",               "Q4 2024 (USD M)": 420.0},
+    {"Category": "Operating Income",                "Q4 2024 (USD M)": 270.0},
+    {"Category": "Net Income",                       "Q4 2024 (USD M)": 230.0},
+]
+
+
+class TestHybridComputedResultContradiction:
+    """KNOWN LIMITATION, currently failing on purpose.
+
+    Reproduces a bug first found by manually querying the live system: for
+    "what's the combined Q4 total from just the revenue line items", the
+    verbose-mode call trace showed query_type=hybrid, hybrid.try_compute
+    value=3760.0 (it summed every non-"total"-labelled row: the four revenue
+    lines PLUS Cost of Goods Sold, Gross Profit, Operating Expenses, Operating
+    Income, and Net Income) — while the synthesizer's own prose reasoning
+    over the raw rows in context correctly said $1,420M.
+
+    run_hybrid() attaches _try_compute's output to synthesis.result["computed"]
+    unconditionally, with no check against what the synthesized answer actually
+    says. The result: api/schemas.py::QueryResult.computed is documented as
+    "machine-checkable verified data ... independent of the prose ... assert
+    the exact figure here without parsing the answer text" — but here it
+    silently CONTRADICTS a prose answer that happens to be correct. A reviewer
+    who trusts the structured field over the prose (exactly what that field
+    exists for) gets the wrong number.
+
+    This test is expected to fail until run_hybrid either (a) suppresses an
+    uncategorized/wrongly-scoped _try_compute figure instead of presenting it
+    unconditionally, or (b) cross-checks it against the synthesized answer the
+    way the analytical path cross-checks SQL against pandas. Do not "fix" it
+    by loosening the assertion.
+    """
+
+    async def test_computed_result_does_not_contradict_synthesized_answer(self):
+        from pipeline.hybrid import run_hybrid
+        from pipeline.synthesizer import SynthesisResult
+
+        # Mirrors the live incident: the LLM's prose answer correctly scopes to
+        # just the four revenue line items and states $1,420M.
+        async def capture_synth(question, context, sources, mode="standard"):
+            return SynthesisResult(
+                answer="Combined Q4 total for the four revenue line items = $1,420M.",
+                sources=[], eval_passed=True,
+                answer_basis="indexed_documents", rejection_reason=None,
+            )
+
+        with patch("pipeline.hybrid.search_text_chunks") as mock_search, \
+             patch("pipeline.hybrid.get_table_rows") as mock_rows, \
+             patch("pipeline.hybrid.synthesize", new_callable=AsyncMock, side_effect=capture_synth):
+
+            mock_search.ainvoke = AsyncMock(return_value=[])
+            mock_rows.ainvoke = AsyncMock(return_value=INCOME_STATEMENT_ROWS)
+
+            result = await run_hybrid(_make_intent(
+                target_table="Table 1: Consolidated Income Statement (USD Millions)",
+                target_column="Q4 2024 (USD M)",
+                aggregation="sum the revenue line items only",
+            ))
+
+        assert result.answer is not None
+        assert "1,420" in result.answer or "1420" in result.answer
+
+        # The machine-checkable figure must not contradict the prose it's
+        # supposedly backing up. Today it does: computed.value is 3760 (every
+        # non-"total"-labelled row summed), not 1420.
+        assert result.result["computed"]["value"] == 1420.0
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — real LLM + DB with indexed NovaTech PDF
 # ---------------------------------------------------------------------------
