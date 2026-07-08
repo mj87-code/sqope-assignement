@@ -55,9 +55,6 @@ class QueryIntent(BaseModel):
     clarified_query: str = Field(
         description="The user's question rephrased for clarity, preserving original intent exactly."
     )
-    entities: list[str] = Field(
-        description="Key entities: company names, departments, metrics, time periods, product lines."
-    )
     target_table: str | None = Field(
         default=None,
         description=(

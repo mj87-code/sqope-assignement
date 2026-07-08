@@ -30,7 +30,6 @@ def _make_intent(**kwargs):
     defaults = dict(
         query_type="hybrid",
         clarified_query="Which department is likely to need the most hiring in Q1?",
-        entities=["Q1", "hiring", "department"],
         target_table="Departmental Headcount",
         target_column="Headcount Q4",
         row_filter=None,

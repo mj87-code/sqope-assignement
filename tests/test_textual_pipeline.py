@@ -206,7 +206,6 @@ class TestTextualPipeline:
         return QueryIntent(
             query_type="textual",
             clarified_query=clarified_query,
-            entities=["Q4"],
             confidence=0.95,
             reasoning="Narrative question.",
         )
@@ -306,7 +305,6 @@ class TestTextualIntegration:
         return QueryIntent(
             query_type="textual",
             clarified_query=query,
-            entities=[],
             confidence=0.9,
             reasoning="test",
         )

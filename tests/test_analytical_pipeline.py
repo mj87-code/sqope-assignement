@@ -23,7 +23,6 @@ def _make_intent(**kwargs):
     defaults = dict(
         query_type="analytical",
         clarified_query="What is the total Q3 headcount?",
-        entities=["Q3", "headcount"],
         target_table="Table 3",
         target_column=None,
         row_filter=None,
