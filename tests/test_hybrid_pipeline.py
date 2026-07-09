@@ -257,6 +257,102 @@ class TestHybridPipeline:
 
 
 # ---------------------------------------------------------------------------
+# Computed/prose consistency guard
+# ---------------------------------------------------------------------------
+
+# Mirrors the real NovaTech Income Statement: revenue line items mixed with
+# non-revenue metrics that carry no "total"/"subtotal" label, so nothing trips
+# _is_aggregate_row's exclusion for them.
+INCOME_STATEMENT_ROWS = [
+    {"Category": "Revenue - Cloud Services",       "Q4 2024 (USD M)": 680.0},
+    {"Category": "Revenue - AI Solutions",          "Q4 2024 (USD M)": 310.0},
+    {"Category": "Revenue - Hardware",              "Q4 2024 (USD M)": 250.0},
+    {"Category": "Revenue - Support & Maintenance", "Q4 2024 (USD M)": 180.0},
+    {"Category": "Total Revenue",                   "Q4 2024 (USD M)": 1420.0},
+    {"Category": "Cost of Goods Sold",              "Q4 2024 (USD M)": 730.0},
+    {"Category": "Gross Profit",                    "Q4 2024 (USD M)": 690.0},
+    {"Category": "Operating Expenses",               "Q4 2024 (USD M)": 420.0},
+    {"Category": "Operating Income",                "Q4 2024 (USD M)": 270.0},
+    {"Category": "Net Income",                       "Q4 2024 (USD M)": 230.0},
+]
+
+
+class TestComputedAgreesWithAnswer:
+    def test_match_with_thousands_separator(self):
+        from pipeline.hybrid import _computed_agrees_with_answer
+        assert _computed_agrees_with_answer(1420.0, "The total was $1,420M.") is True
+
+    def test_match_across_unit_scaling(self):
+        from pipeline.hybrid import _computed_agrees_with_answer
+        # column in USD millions, prose restated in billions
+        assert _computed_agrees_with_answer(1420.0, "roughly $1.42 billion") is True
+
+    def test_contradiction_detected(self):
+        from pipeline.hybrid import _computed_agrees_with_answer
+        assert _computed_agrees_with_answer(3760.0, "Revenue totalled $1,420M.") is False
+
+    def test_answer_without_numbers_counts_as_agreement(self):
+        from pipeline.hybrid import _computed_agrees_with_answer
+        assert _computed_agrees_with_answer(2620.0, "R&D grew the fastest.") is True
+
+
+class TestComputedConsistencyGuard:
+    """result["computed"] is documented as machine-checkable and independent of
+    the prose — it must never ship a figure that contradicts the answer it
+    accompanies. On a mixed table, _try_compute can silently aggregate the
+    wrong row set (it only excludes literal total/subtotal labels) while the
+    synthesizer, reading the raw rows in context, answers correctly — observed
+    live: computed 3760.0 alongside a correct prose answer of $1,420M."""
+
+    def _guard_intent(self):
+        return _make_intent(
+            clarified_query="What is the combined Q4 total from just the revenue line items?",
+            target_table="Table 1: Consolidated Income Statement (USD Millions)",
+            target_column="Q4 2024 (USD M)",
+            aggregation="sum the revenue line items only",
+        )
+
+    async def _run_with_answer(self, answer: str):
+        from pipeline.hybrid import run_hybrid
+        from pipeline.synthesizer import SynthesisResult
+
+        with patch("pipeline.hybrid.search_text_chunks") as mock_search, \
+             patch("pipeline.hybrid.get_table_rows") as mock_rows, \
+             patch("pipeline.hybrid.synthesize", new_callable=AsyncMock) as mock_synth:
+
+            mock_search.ainvoke = AsyncMock(return_value=[])
+            mock_rows.ainvoke = AsyncMock(return_value=INCOME_STATEMENT_ROWS)
+            mock_synth.return_value = SynthesisResult(
+                answer=answer, sources=[], eval_passed=True,
+                answer_basis="indexed_documents", rejection_reason=None,
+            )
+            return await run_hybrid(self._guard_intent())
+
+    async def test_contradicting_computed_is_dropped(self):
+        # _try_compute sums every non-"total" row here (= 3760.0); the prose
+        # correctly says 1,420 — the contradicting figure must not be attached.
+        result = await self._run_with_answer(
+            "The combined Q4 total for the four revenue line items is $1,420M."
+        )
+        assert result.answer is not None
+        assert result.result["computed"] is None
+        assert result.result["rows"]  # raw rows still attached for inspection
+
+    async def test_agreeing_computed_is_kept(self):
+        result = await self._run_with_answer(
+            "The sum across all listed line items is $3,760M."
+        )
+        assert result.result["computed"] is not None
+        assert result.result["computed"]["value"] == 3760.0
+
+    async def test_numberless_answer_keeps_computed(self):
+        result = await self._run_with_answer(
+            "The revenue line items dominate the quarter."
+        )
+        assert result.result["computed"] is not None
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — real LLM + DB with indexed NovaTech PDF
 # ---------------------------------------------------------------------------
 

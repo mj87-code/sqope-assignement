@@ -7,6 +7,8 @@ conclusions from the provided data without reaching into training knowledge.
 """
 import asyncio
 import logging
+import math
+import re
 
 from database.table_store import format_rows
 from pipeline.context_format import build_sources, format_chunk_blocks
@@ -30,6 +32,40 @@ def _relevant_enough(chunk: dict, retrieval_style: str) -> bool:
     if retrieval_style == "broad":
         return chunk["similarity"] >= _HYBRID_SIMILARITY_FLOOR
     return chunk["rerank_score"] >= _HYBRID_RERANK_FLOOR
+
+
+_NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+# Prose often restates a figure at a different unit scale than the table column
+# ("$1.42 billion" for a column in USD millions) — a match at any common
+# thousands-step scaling counts as agreement.
+_UNIT_SCALES = (1.0, 1e3, 1e6, 1e-3, 1e-6)
+
+
+def _numbers_in(text: str) -> list[float]:
+    out = []
+    for token in _NUMBER_RE.findall(text):
+        try:
+            out.append(float(token.replace(",", "")))
+        except ValueError:
+            continue
+    return out
+
+
+def _computed_agrees_with_answer(value: float, answer: str) -> bool:
+    """False only on a demonstrable contradiction: the answer states at least
+    one number and none of them matches the computed value at any common unit
+    scaling. An answer with no numbers can't contradict, so it counts as
+    agreement — the guard's bias is to keep, and only drop what provably
+    conflicts with the prose."""
+    numbers = _numbers_in(answer)
+    if not numbers:
+        return True
+    return any(
+        math.isclose(n * scale, value, rel_tol=1e-3)
+        for n in numbers
+        for scale in _UNIT_SCALES
+    )
 
 
 async def run_hybrid(intent: QueryIntent) -> SynthesisResult:
@@ -85,19 +121,33 @@ async def run_hybrid(intent: QueryIntent) -> SynthesisResult:
     synthesis = await synthesize(intent.clarified_query, context, sources, mode="grounded")
     # Attach the verified table data / computed value behind the prediction.
     if has_table:
-        synthesis.result = {
-            "kind": "hybrid",
-            "rows": rows[:100],
-            "computed": (
-                {
+        computed_payload = None
+        if computed is not None:
+            # Consistency guard: _try_compute has no notion of semantic row
+            # category, so on a mixed table it can aggregate the wrong row set
+            # while the synthesizer, reasoning over the raw rows in context,
+            # answers correctly. `computed` is documented as machine-checkable
+            # truth independent of the prose — a figure that contradicts the
+            # prose must be dropped, not shipped as verified.
+            if synthesis.answer is None or _computed_agrees_with_answer(
+                float(computed.value), synthesis.answer
+            ):
+                computed_payload = {
                     "operation": computed.operation,
                     "column": intent.target_column,
                     "value": computed.value,
                     "matched_row": computed.matched_row,
                 }
-                if computed
-                else None
-            ),
+            else:
+                log.warning(
+                    "  computed %s('%s')=%s contradicts the synthesized answer — "
+                    "dropping it from the structured result",
+                    computed.operation, intent.target_column, computed.value,
+                )
+        synthesis.result = {
+            "kind": "hybrid",
+            "rows": rows[:100],
+            "computed": computed_payload,
         }
     return synthesis
 
