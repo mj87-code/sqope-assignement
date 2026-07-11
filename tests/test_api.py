@@ -101,6 +101,30 @@ class TestQueryRoute:
         assert "Q1 2025" in body["rejection_reason"]
         mock_hybrid.assert_not_called()
 
+    async def test_needs_clarification_without_question_still_refuses(self):
+        """needs_clarification=True with clarification_question=None must refuse
+        with a generic fallback reason — not fall through and answer a question
+        the clarifier itself flagged as ambiguous."""
+        app = _make_app()
+        intent = self._mock_intent(
+            query_type="hybrid",
+            needs_clarification=True,
+            clarification_question=None,
+        )
+
+        with patch("api.routes.get_async_session") as mock_session_ctx, \
+             patch("api.routes.clarify_intent", new_callable=AsyncMock, return_value=intent), \
+             patch("api.routes.run_hybrid", new_callable=AsyncMock) as mock_hybrid:
+            self._session_patch(mock_session_ctx)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post("/query?verbose=true", json={"question": "predict Q5"})
+
+        body = resp.json()
+        assert body["answer_basis"] == "needs_clarification"
+        assert body["answer"] is None
+        assert body["rejection_reason"]
+        mock_hybrid.assert_not_called()
+
     async def test_low_confidence_returns_rejection(self):
         app = _make_app()
         intent = self._mock_intent(confidence=0.5)

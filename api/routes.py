@@ -61,7 +61,7 @@ async def query(request: QueryRequest, verbose: bool = False) -> QueryResponse |
         ), verbose)
 
     # Clarification: in-scope but ambiguous / out-of-range period.
-    if intent.needs_clarification and intent.clarification_question:
+    if intent.needs_clarification:
         log.info("NEEDS CLARIFICATION: %s", intent.clarification_question)
         return _respond(QueryResponse(
             answer=None,
@@ -69,7 +69,10 @@ async def query(request: QueryRequest, verbose: bool = False) -> QueryResponse |
             sources=[],
             eval_passed=False,
             answer_basis="needs_clarification",
-            rejection_reason=intent.clarification_question,
+            rejection_reason=intent.clarification_question or (
+                "Your question is ambiguous — please ask again as a fully "
+                "self-contained question naming the exact period, table, or metric you mean."
+            ),
             confidence=intent.confidence,
             trace=trace,
         ), verbose)
